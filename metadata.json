@@ -1,0 +1,8 @@
+
+{
+  "name": "Real Estate Ad Compliance Checker",
+  "description": "不動産広告のコピーや物件概要を公正競争規約に基づき厳格に校閲・ファクトチェックし、修正案と根拠ソースを提示する専門ツールです。",
+  "requestFramePermissions": [
+    "geolocation"
+  ]
+}
