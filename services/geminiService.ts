@@ -1,40 +1,5 @@
-
-import { GoogleGenAI, Type, GenerateContentResponse } from "@google/genai";
+import { GoogleGenAI } from "@google/genai";
 import { ComplianceReport } from "../types";
-
-// API Key is automatically handled by the environment
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || "" });
-
-const SYSTEM_INSTRUCTION = `
-あなたは大手不動産会社の「マーケティング部・広告審査課」に所属する、熟練のコンプライアンス担当者です。
-提出された「エビデンス（Excel）」と「デザイン案（AIデータ/画像/PDF）」を照合し、不動産表示の公正競争規約に基づき校閲してください。
-
-【厳守すべき校閲ルール】
-1. 地図および周辺施設:
-   - Google Mapsを活用し、物件の所在地、周辺施設が「現時点で存在するか」「名称が正しいか」を検証してください。
-   - 閉店した店舗が掲載されている場合は「修正要」と判定してください。
-2. 徒歩時間の再計算:
-   - 実際の道路距離を測定し、「80m=1分（端数切り上げ）」で算出されているか確認してください。
-3. 特定用語の制限:
-   - 「日本一」「最高」「格安」「完売」等の表現には、客観的な根拠（出典・調査日）の併記が必要です。
-
-【出力形式】
-必ずJSON形式で回答してください。JSON以外のテキストを含めないでください。
-{
-  "results": [
-    {
-      "item": "項目名",
-      "originalContent": "制作物上の記載",
-      "factCheckResult": "事実照合結果（具体的な根拠を記載）",
-      "judgment": "PASS" | "WARNING" | "FAIL",
-      "suggestion": "具体的な修正案",
-      "source": "根拠資料名"
-    }
-  ],
-  "revisedAdCopy": "規約に準拠した修正後の完成原稿",
-  "overallComment": "総評"
-}
-`;
 
 export async function checkComplianceWithFiles(
   adText: string, 
@@ -42,22 +7,36 @@ export async function checkComplianceWithFiles(
   designFile?: { data: string, mimeType: string },
   location?: { latitude: number, longitude: number }
 ): Promise<ComplianceReport> {
-  // Re-initialize to ensure latest API key is used
-  const genAI = new GoogleGenAI({ apiKey: process.env.API_KEY || "" });
+  // システムの指示に従い、process.env.API_KEY から直接取得
+  const apiKey = process.env.API_KEY;
+
+  if (!apiKey) {
+    throw new Error("APIキーが見つかりません。Vercelの設定が反映されていないか、Redeployが必要です。");
+  }
+
+  const ai = new GoogleGenAI({ apiKey });
   
   try {
-    const parts: any[] = [
-      { text: `
-【検証対象テキスト】
+    const prompt = `
+あなたは大手不動産会社の広告審査担当者です。
+提供された原本データ（エビデンス）と、ユーザーが作成した広告案を比較し、「不動産の表示に関する公正競争規約」に基づき校閲してください。
+
+【広告案】
 ${adText}
 
-【物件原本データ（Excel）】
+【物件原本（エビデンス）】
 ${evidenceText}
 
-上記データと添付のデザイン案を照合してください。
-特に、Google検索とGoogle Mapsを使用して、周辺店舗の存続状況や駅までの距離を厳格にファクトチェックしてください。
-` }
-    ];
+【審査のポイント】
+1. アクセス: 「徒歩○分」が道路距離80m=1分で計算されているか（Google Maps等で検証）。
+2. 周辺施設: 店舗が現在も存在するか（Google Search等で検証）。
+3. 禁止表現: 根拠なき「最高」「格安」「日本一」の使用。
+
+【出力】
+必ずJSON形式で、results配列、revisedAdCopy、overallCommentを含めてください。
+`;
+
+    const parts: any[] = [{ text: prompt }];
 
     if (designFile) {
       parts.push({
@@ -68,11 +47,10 @@ ${evidenceText}
       });
     }
 
-    const response = await genAI.models.generateContent({
-      model: "gemini-2.5-flash",
+    const response = await ai.models.generateContent({
+      model: "gemini-3-flash-preview",
       contents: [{ role: 'user', parts }],
       config: {
-        systemInstruction: SYSTEM_INSTRUCTION,
         responseMimeType: "application/json",
         tools: [{ googleSearch: {} }, { googleMaps: {} }],
         toolConfig: location ? {
@@ -87,17 +65,10 @@ ${evidenceText}
     });
 
     const responseText = response.text || "{}";
-    const report = JSON.parse(responseText) as ComplianceReport;
-    
-    // Extract grounding metadata for sourcing
-    const groundingChunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks;
-    if (groundingChunks) {
-      report.groundingSources = groundingChunks as any;
-    }
-
-    return report;
-  } catch (error) {
-    console.error("Compliance Check Error:", error);
-    throw error;
+    const cleanedJson = responseText.replace(/```json/g, '').replace(/```/g, '').trim();
+    return JSON.parse(cleanedJson) as ComplianceReport;
+  } catch (error: any) {
+    console.error("Analysis Error:", error);
+    throw new Error(error.message || "AIの解析中にエラーが発生しました。");
   }
 }
